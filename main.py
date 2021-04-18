@@ -1,10 +1,13 @@
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Float, Boolean
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Float, Boolean, DateTime
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import insert, exists
 import json
+from geomet import wkt
 from pprint import pprint
 # todo replace migrate with alembic
 from migrate.versioning.schema import Table as TableM, Column as ColumnM
+import datetime
+from tqdm import tqdm
 # from alembic import op
 
 # "constants" declaration
@@ -12,7 +15,8 @@ TYPE_MAPPING = {
     int: Integer,
     str: String,
     float: Float,
-    bool: Boolean
+    bool: Boolean,
+    datetime.datetime: DateTime
 }
 
 DEFAULT_ID_COLUMN = "ID"
@@ -36,7 +40,7 @@ class JSON2DB:
     def __process_sublist(self, elements, tablename, parent_id, parent_tablename):
         for element in elements:
             _type = type(element)
-            if _type is None:
+            if _type == type(None):
                 # improve todo how to deal with null in table creation
                 pass
             elif list == _type:
@@ -100,17 +104,23 @@ class JSON2DB:
                 insert(table).
                     values(**element)
             )
-            self.my_session.execute(stmt)
+            try:
+                self.my_session.execute(stmt)
+            except Exception as e:
+                raise(e)
             self.my_session.commit()
+
+    def _try_especial_data(self, ele, tablename):
+        return str(ele)
 
     def _json_to_db(self, ele, tablename):
         m2m_elements = []
         object_to_store = {}
         if DEFAULT_ID_COLUMN not in ele:
-            return str(ele)
+            return self._try_especial_data(ele, tablename)
         for key in ele:
             _type = type(ele[key])
-            if _type is None:
+            if _type == type(None):
                 # todo improve how to deal with null in table creation
                 pass
             elif list == _type:
@@ -149,17 +159,35 @@ class OCMData2DB(JSON2DB):
 
     def export_json(self, json_file,root_table_name="main_table"):
         with open(json_file) as f:
-            for ele in f:
+            for ele in tqdm(f):
                 self._json_to_db(json.loads(ele), root_table_name)
 
         # self.my_session.commit()
         self.my_session.close()
 
+    def _try_especial_data(self, ele, tablename):
+        try:
+            if "$date" in ele and 1 == len(ele): # only date {"$date":"2019-04-06T04:01:00Z"}
+                try:
+                    return datetime.datetime.strptime(ele["$date"],"%Y-%m-%dT%H:%M:%SZ")
+                except:
+                    return datetime.datetime.strptime(ele["$date"], "%Y-%m-%dT%H:%M:%S.%fZ")
+            # for geojsons {"type":"Point","coordinates":[-118.081014,34.050745]}
+            elif "type" in ele and "coordinates" in ele:
+                return wkt.dumps(ele)
+            else:
+                return str(ele)
+        except:
+            return str(ele)
+
 
 if __name__ == "__main__":
-    exporter = JSON2DB('sqlite:///test.db')
-    exporter.export_json("sample_data/six_poi.json")
-
+    # exporter = JSON2DB('sqlite:///test.db')
+    # exporter.export_json("sample_data/six_poi.json")
+    #
     exporter = OCMData2DB('sqlite:///test2.db')
-    exporter.export_json("sample_data/100_invalid.json")
+    exporter.export_json("sample_data/100_invalid.json", "initial_table")
 
+    # exporter = OCMData2DB('postgresql://ruignpdq:msoz_yMqzBpXQ5FVRBnTnSGXDYr3GDGf@tai.db.elephantsql.com:5432/ruignpdq')
+    # exporter.export_json("sample_data/100_invalid.json", "initial_table")
+    #
